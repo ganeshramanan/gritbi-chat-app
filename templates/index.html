@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Real-time Chat — Gritbi Project</title>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<style>
+  :root {
+    --bg: #0f1115; --card: #171a21; --border: #2a2f3a;
+    --accent: #5b8cff; --accent2: #7ee8b8;
+    --text: #eef1f6; --text-dim: #9aa3b2;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); height: 100vh; display: flex; align-items: center; justify-content: center; }
+
+  /* Join Screen */
+  #joinScreen { text-align: center; max-width: 400px; padding: 24px; }
+  #joinScreen h1 { font-size: 24px; margin-bottom: 6px; }
+  #joinScreen p { color: var(--text-dim); font-size: 13px; margin-bottom: 24px; }
+  #joinScreen .badge {
+    display: inline-block; margin-bottom: 16px; font-size: 11px; font-weight: 700;
+    background: rgba(91,140,255,0.15); color: var(--accent); padding: 4px 12px;
+    border-radius: 20px; text-transform: uppercase;
+  }
+  input {
+    width: 100%; background: var(--card); border: 1px solid var(--border); color: var(--text);
+    padding: 12px 14px; border-radius: 8px; font-size: 14px; margin-bottom: 12px;
+  }
+  input:focus { outline: none; border-color: var(--accent); }
+  button {
+    width: 100%; background: var(--accent); color: #fff; border: none; padding: 12px;
+    border-radius: 8px; font-weight: 700; font-size: 14px; cursor: pointer;
+  }
+  button:hover { opacity: 0.9; }
+
+  /* Chat Screen */
+  #chatScreen { display: none; width: 100%; max-width: 900px; height: 90vh; }
+  .chat-wrap { display: flex; height: 100%; gap: 16px; }
+  .sidebar {
+    width: 200px; background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px; display: flex; flex-direction: column;
+  }
+  .sidebar h3 { font-size: 12px; color: var(--text-dim); text-transform: uppercase; margin-bottom: 12px; }
+  .user-item { padding: 8px 0; font-size: 13px; display: flex; align-items: center; gap: 8px; }
+  .user-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent2); }
+  .room-info { margin-top: auto; font-size: 11px; color: var(--text-dim); }
+
+  .chat-main {
+    flex: 1; background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .chat-header { padding: 16px; border-bottom: 1px solid var(--border); font-weight: 700; font-size: 14px; }
+  .chat-messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .msg { max-width: 75%; padding: 10px 14px; border-radius: 12px; font-size: 13px; }
+  .msg.own { background: var(--accent); color: #fff; align-self: flex-end; }
+  .msg.other { background: var(--bg); border: 1px solid var(--border); align-self: flex-start; }
+  .msg .msg-user { font-size: 11px; font-weight: 700; opacity: 0.8; margin-bottom: 3px; }
+  .msg .msg-time { font-size: 10px; opacity: 0.6; margin-top: 4px; }
+  .system-msg { text-align: center; font-size: 11px; color: var(--text-dim); font-style: italic; }
+  .typing-indicator { font-size: 11px; color: var(--text-dim); padding: 0 16px 8px; min-height: 16px; }
+
+  .chat-input-row { display: flex; gap: 8px; padding: 16px; border-top: 1px solid var(--border); }
+  .chat-input-row input { margin-bottom: 0; }
+  .chat-input-row button { width: auto; padding: 10px 20px; }
+</style>
+</head>
+<body>
+
+<div id="joinScreen">
+  <div class="badge">Gritbi Project #4 · Tier 2</div>
+  <h1>💬 Real-time Chat</h1>
+  <p>Join a room and start chatting live with others.</p>
+  <input type="text" id="usernameInput" placeholder="Your name" maxlength="20">
+  <input type="text" id="roomInput" placeholder="Room name (e.g. general)" maxlength="20" value="general">
+  <button onclick="joinChat()">Join Chat</button>
+</div>
+
+<div id="chatScreen">
+  <div class="chat-wrap">
+    <div class="sidebar">
+      <h3>Online (<span id="userCount">0</span>)</h3>
+      <div id="userList"></div>
+      <div class="room-info">Room: <span id="roomLabel"></span></div>
+    </div>
+    <div class="chat-main">
+      <div class="chat-header">💬 <span id="roomTitle"></span></div>
+      <div class="chat-messages" id="chatMessages"></div>
+      <div class="typing-indicator" id="typingIndicator"></div>
+      <div class="chat-input-row">
+        <input type="text" id="messageInput" placeholder="Type a message..." onkeypress="handleKeyPress(event)">
+        <button onclick="sendMessage()">Send</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const socket = io();
+  let username = "";
+  let room = "";
+  let typingTimeout;
+
+  function joinChat() {
+    username = document.getElementById("usernameInput").value.trim() || "Anonymous";
+    room = document.getElementById("roomInput").value.trim() || "general";
+
+    document.getElementById("joinScreen").style.display = "none";
+    document.getElementById("chatScreen").style.display = "block";
+    document.getElementById("roomTitle").textContent = "#" + room;
+    document.getElementById("roomLabel").textContent = room;
+
+    socket.emit("join", { username, room });
+  }
+
+  function sendMessage() {
+    const input = document.getElementById("messageInput");
+    const message = input.value.trim();
+    if (message) {
+      socket.emit("send_message", { username, room, message });
+      input.value = "";
+    }
+  }
+
+  function handleKeyPress(e) {
+    if (e.key === "Enter") {
+      sendMessage();
+    } else {
+      socket.emit("typing", { username, room });
+    }
+  }
+
+  function appendMessage(html) {
+    const container = document.getElementById("chatMessages");
+    container.insertAdjacentHTML("beforeend", html);
+    container.scrollTop = container.scrollHeight;
+  }
+
+  socket.on("receive_message", (data) => {
+    const isOwn = data.username === username;
+    appendMessage(`
+      <div class="msg ${isOwn ? 'own' : 'other'}">
+        ${!isOwn ? `<div class="msg-user">${data.username}</div>` : ''}
+        <div>${data.message}</div>
+        <div class="msg-time">${data.time}</div>
+      </div>
+    `);
+  });
+
+  socket.on("system_message", (data) => {
+    appendMessage(`<div class="system-msg">${data.text} · ${data.time}</div>`);
+  });
+
+  socket.on("user_list", (data) => {
+    document.getElementById("userCount").textContent = data.users.length;
+    document.getElementById("userList").innerHTML = data.users
+      .map(u => `<div class="user-item"><span class="user-dot"></span>${u}</div>`)
+      .join("");
+  });
+
+  socket.on("user_typing", (data) => {
+    const indicator = document.getElementById("typingIndicator");
+    indicator.textContent = `${data.username} is typing...`;
+    clearTimeout(typingTimeout);
+    typingTimeout = setTimeout(() => { indicator.textContent = ""; }, 1500);
+  });
+
+  window.addEventListener("beforeunload", () => {
+    if (username && room) {
+      socket.emit("leave", { username, room });
+    }
+  });
+</script>
+
+</body>
+</html>
